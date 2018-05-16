@@ -1,13 +1,13 @@
 package nfsbroker
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path"
-	"regexp"
+	"strconv"
 	"sync"
 
 	"crypto/md5"
@@ -17,6 +17,7 @@ import (
 	"code.cloudfoundry.org/lager"
 	"code.cloudfoundry.org/service-broker-store/brokerstore"
 	"github.com/pivotal-cf/brokerapi"
+	"github.com/thecodeteam/goisilon"
 )
 
 const (
@@ -29,6 +30,13 @@ const (
 	Secret   string = "kerberosKeytab"
 )
 
+const (
+	_        = iota // ignore first value
+	KB int64 = 1 << (10 * iota)
+	MB
+	GB
+)
+
 type staticState struct {
 	ServiceName string `json:"ServiceName"`
 	ServiceId   string `json:"ServiceId"`
@@ -37,6 +45,9 @@ type staticState struct {
 type lock interface {
 	Lock()
 	Unlock()
+}
+
+type clientConfig struct {
 }
 
 type Broker struct {
@@ -48,6 +59,16 @@ type Broker struct {
 	static  staticState
 	store   brokerstore.Store
 	config  Config
+	isilonClientConfig
+}
+
+type isilonClientConfig struct {
+	insecure string
+	endpoint string
+	username string
+	password string
+	group    string
+	volPath  string
 }
 
 func New(
@@ -57,6 +78,7 @@ func New(
 	clock clock.Clock,
 	store brokerstore.Store,
 	config *Config,
+	isilConf map[string]string,
 ) *Broker {
 
 	theBroker := Broker{
@@ -71,6 +93,14 @@ func New(
 			ServiceId:   serviceId,
 		},
 		config: *config,
+		isilonClientConfig: isilonClientConfig{
+			isilConf["insecure"],
+			isilConf["endpoint"],
+			isilConf["username"],
+			isilConf["password"],
+			isilConf["group"],
+			isilConf["volpath"],
+		},
 	}
 
 	theBroker.store.Restore(logger)
@@ -86,17 +116,22 @@ func (b *Broker) Services(_ context.Context) []brokerapi.Service {
 	return []brokerapi.Service{{
 		ID:            b.static.ServiceId,
 		Name:          b.static.ServiceName,
-		Description:   "Existing NFSv3 volumes (see: https://code.cloudfoundry.org/nfs-volume-release/)",
+		Description:   "DELL EMC Isilon",
 		Bindable:      true,
 		PlanUpdatable: false,
-		Tags:          []string{"nfs"},
+		Tags:          []string{"nfs", "isilon"},
 		Requires:      []brokerapi.RequiredPermission{PermissionVolumeMount},
 
 		Plans: []brokerapi.ServicePlan{
 			{
-				Name:        "Existing",
-				ID:          "Existing",
-				Description: "A preexisting filesystem",
+				ID:          "5",
+				Name:        "5GB",
+				Description: "5GB Dell EMC Isilon NFS Share.",
+			},
+			{
+				ID:          "10",
+				Name:        "10GB",
+				Description: "10GB Dell EMC Isilon NFS Share.",
 			},
 		},
 	}}
@@ -107,26 +142,47 @@ func (b *Broker) Provision(context context.Context, instanceID string, details b
 	logger.Info("start")
 	defer logger.Info("end")
 
-	type Configuration struct {
-		Share string `json:"share"`
+	if b.isilonClientConfig.insecure == "" {
+		b.isilonClientConfig.insecure = "false"
+	} // set default to false
+
+	cliIsInsecure, _ := strconv.ParseBool(b.isilonClientConfig.insecure)
+	client, e := goisilon.NewClientWithArgs(
+		context,
+		b.endpoint,
+		cliIsInsecure,
+		b.username,
+		b.group,
+		b.password,
+		b.volPath)
+	if e != nil {
+		return brokerapi.ProvisionedServiceSpec{}, fmt.Errorf("failed to create isilon client %s with error %s", instanceID, e)
 	}
-	var configuration Configuration
 
-	var decoder *json.Decoder = json.NewDecoder(bytes.NewBuffer(details.RawParameters))
-	err := decoder.Decode(&configuration)
-	if err != nil {
-		return brokerapi.ProvisionedServiceSpec{}, brokerapi.ErrRawParamsInvalid
+	// Create Volume
+	_, e = client.CreateVolume(context, instanceID)
+	if e != nil {
+		return brokerapi.ProvisionedServiceSpec{}, fmt.Errorf("failed to create isilon volume %s with error %s", instanceID, e)
 	}
 
-	if configuration.Share == "" {
-		return brokerapi.ProvisionedServiceSpec{}, errors.New("config requires a \"share\" key")
+	// Create Export
+	_, e = client.ExportVolume(context, instanceID)
+	if e != nil {
+		return brokerapi.ProvisionedServiceSpec{}, fmt.Errorf("failed to create isilon export %s with error %s", instanceID, e)
 	}
 
-	re := regexp.MustCompile("^[^/]+:/")
-	match := re.MatchString(configuration.Share)
-
-	if match {
-		return brokerapi.ProvisionedServiceSpec{}, errors.New("syntax error for share: no colon allowed after server")
+	// Create Quota
+	n, e := strconv.ParseInt(details.PlanID, 10, 64)
+	if e != nil {
+		return brokerapi.ProvisionedServiceSpec{}, fmt.Errorf("failed to convert plan size to bytes for plan - %s", details.PlanID)
+	}
+	size := n * GB
+	if size == 0 {
+		return brokerapi.ProvisionedServiceSpec{}, fmt.Errorf("plan size must be greater than 0 bytes")
+	}
+	e = client.SetQuotaSize(context, instanceID, size)
+	if e != nil {
+		return brokerapi.ProvisionedServiceSpec{}, fmt.Errorf("failed to set isilon quota for %s with error %s", instanceID, e)
 	}
 
 	b.mutex.Lock()
@@ -138,19 +194,20 @@ func (b *Broker) Provision(context context.Context, instanceID string, details b
 		}
 	}()
 
+	volumePath := os.Getenv("GOISILON_VOLUMEPATH") + "/" + instanceID
 	instanceDetails := brokerstore.ServiceInstance{
 		details.ServiceID,
 		details.PlanID,
 		details.OrganizationGUID,
 		details.SpaceGUID,
-		configuration.Share}
+		volumePath}
 
 	if b.instanceConflicts(instanceDetails, instanceID) {
 		return brokerapi.ProvisionedServiceSpec{}, brokerapi.ErrInstanceAlreadyExists
 	}
 
-	err = b.store.CreateInstanceDetails(instanceID, instanceDetails)
-	if err != nil {
+	e = b.store.CreateInstanceDetails(instanceID, instanceDetails)
+	if e != nil {
 		return brokerapi.ProvisionedServiceSpec{}, fmt.Errorf("failed to store instance details %s", instanceID)
 	}
 
@@ -163,6 +220,41 @@ func (b *Broker) Deprovision(context context.Context, instanceID string, details
 	logger := b.logger.Session("deprovision")
 	logger.Info("start")
 	defer logger.Info("end")
+
+	if b.insecure == "" {
+		b.insecure = "false"
+	} // set default to false
+
+	cliIsInsecure, _ := strconv.ParseBool(b.insecure)
+	client, e := goisilon.NewClientWithArgs(
+		context,
+		b.endpoint,
+		cliIsInsecure,
+		b.username,
+		b.group,
+		b.password,
+		b.volPath)
+	if e != nil {
+		return brokerapi.DeprovisionServiceSpec{}, fmt.Errorf("failed to delete isilon client %s with error %s", instanceID, e)
+	}
+
+	// Delete Export
+	e = client.UnexportVolume(context, instanceID)
+	if e != nil {
+		return brokerapi.DeprovisionServiceSpec{}, fmt.Errorf("failed to delete isilon export %s with error %s", instanceID, e)
+	}
+
+	// Delete Quota
+	e = client.ClearQuota(context, instanceID)
+	if e != nil {
+		return brokerapi.DeprovisionServiceSpec{}, fmt.Errorf("failed to unset isilon quota for %s with error %s", instanceID, e)
+	}
+
+	// Delete Volume
+	e = client.DeleteVolume(context, instanceID)
+	if e != nil {
+		return brokerapi.DeprovisionServiceSpec{}, fmt.Errorf("failed to delete isilon volume %s with error %s", instanceID, e)
+	}
 
 	b.mutex.Lock()
 	defer b.mutex.Unlock()

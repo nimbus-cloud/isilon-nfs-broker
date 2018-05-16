@@ -97,10 +97,16 @@ var defaultOptions = flag.String(
 )
 
 var (
-	username   string
-	password   string
-	dbUsername string
-	dbPassword string
+	username       string
+	password       string
+	dbUsername     string
+	dbPassword     string
+	isilonInsecure string
+	isilonEndpoint string
+	isilonUsername string
+	isilonPassword string
+	isilonGroup    string
+	isilonVolPath  string
 )
 
 func main() {
@@ -142,6 +148,12 @@ func parseEnvironment() {
 	password, _ = os.LookupEnv("PASSWORD")
 	dbUsername, _ = os.LookupEnv("DB_USERNAME")
 	dbPassword, _ = os.LookupEnv("DB_PASSWORD")
+	isilonInsecure, _ = os.LookupEnv("ISILON_INSECURE")
+	isilonEndpoint, _ = os.LookupEnv("ISILON_ENDPOINT")
+	isilonUsername, _ = os.LookupEnv("ISILON_USERNAME")
+	isilonPassword, _ = os.LookupEnv("ISILON_PASSWORD")
+	isilonGroup, _ = os.LookupEnv("ISILON_GROUP")
+	isilonVolPath, _ = os.LookupEnv("ISILON_VOLUMEPATH")
 }
 
 func checkParams() {
@@ -203,10 +215,17 @@ func createServer(logger lager.Logger) ifrit.Runner {
 	logger.Debug("nfsbroker-startup-config", lager.Data{"config": mounts})
 
 	config := nfsbroker.NewNfsBrokerConfig(mounts)
+	isilonClientConfig := make(map[string]string)
+	isilonClientConfig["insecure"] = isilonInsecure
+	isilonClientConfig["endpoint"] = isilonEndpoint
+	isilonClientConfig["username"] = isilonUsername
+	isilonClientConfig["password"] = isilonPassword
+	isilonClientConfig["group"] = isilonGroup
+	isilonClientConfig["volpath"] = isilonVolPath
 
 	serviceBroker := nfsbroker.New(logger,
 		*serviceName, *serviceId,
-		*dataDir, &osshim.OsShim{}, clock.NewClock(), store, config)
+		*dataDir, &osshim.OsShim{}, clock.NewClock(), store, config, isilonClientConfig)
 
 	credentials := brokerapi.BrokerCredentials{Username: username, Password: password}
 	handler := brokerapi.New(serviceBroker, logger.Session("broker-api"), credentials)
