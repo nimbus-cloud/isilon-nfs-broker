@@ -11,8 +11,8 @@ import (
 	"code.cloudfoundry.org/goshims/osshim"
 	"code.cloudfoundry.org/lager"
 	"code.cloudfoundry.org/lager/lagerflags"
-	"code.cloudfoundry.org/nfsbroker/nfsbroker"
-	"code.cloudfoundry.org/nfsbroker/utils"
+	"github.com/nimbus-cloud/isilon-nfs-broker/nfsbroker"
+	"github.com/nimbus-cloud/isilon-nfs-broker/utils"
 
 	"path/filepath"
 

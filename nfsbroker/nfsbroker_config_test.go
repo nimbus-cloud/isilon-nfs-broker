@@ -7,7 +7,7 @@ import (
 
 	"code.cloudfoundry.org/lager"
 	"code.cloudfoundry.org/lager/lagertest"
-	. "code.cloudfoundry.org/nfsbroker/nfsbroker"
+	. "github.com/nimbus-cloud/isilon-nfs-broker/nfsbroker"
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 )
