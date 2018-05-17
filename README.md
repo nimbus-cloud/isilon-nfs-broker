@@ -6,4 +6,5 @@ For details on how to use this broker, please refer to [the nfs-volume-release R
 Build: 
 ```
  GOOS=linux GOARCH=amd64 go build -o bin/nfsbroker
+ docker build -t nfsbroker .
 ```
