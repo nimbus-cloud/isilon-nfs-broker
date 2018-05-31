@@ -1,22 +1,27 @@
 ---
-  # buildpack: binary_buildpack
-  env:
-    SERVICENAME: nfs #service name to publish in the marketplace
-    USERNAME: admin
-    PASSWORD: admin
-    LOGLEVEL: info #error, warn, info, debug
-    DBDRIVERNAME: mysql #mysql or postgres
+applications:
+- name: nfs-broker-isilon
+  memory: 256M
+  instances: 2
+  services:
+  - nfs-isilon
+  # env:
+  #   SERVICENAME: nfs #service name to publish in the marketplace
+  #   USERNAME: admin
+  #   PASSWORD: admin
+  #   LOGLEVEL: info #error, warn, info, debug
+  #   DBDRIVERNAME: mysql #mysql or postgres
 
     # if the database is provided via cf bind, DBSERVICENAME must be set otherwise
     # it should be omitted and the other db connection parameters should be set.
-    DBSERVICENAME: p-mysql #service name for db service as seen in `cf marketplace`
-    ALLOWED_OPTIONS: "uid,gid,auto_cache,username,password"
-    ISILON_INSECURE: 
-    ISILON_ENDPOINT: 
-    ISILON_USERNAME: 
-    ISILON_GROUP:
-    ISILON_PASSWORD: 
-    ISILON_VOLUMEPATH:
+    # DBSERVICENAME: p-mysql #service name for db service as seen in `cf marketplace`
+    # ALLOWED_OPTIONS: "uid,gid,auto_cache,username,password"
+    # ISILON_INSECURE: 
+    # ISILON_ENDPOINT: 
+    # ISILON_USERNAME: 
+    # ISILON_GROUP:
+    # ISILON_PASSWORD: 
+    # ISILON_VOLUMEPATH:
 
 #   DBHOST: 10.244.0.30
 #   DBPORT: 3306
